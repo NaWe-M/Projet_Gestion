@@ -1,0 +1,219 @@
+import tkinter as tk
+from tkinter import ttk, messagebox
+import os
+from datetime import datetime
+from openpyxl import Workbook, load_workbook
+
+class Produit:
+    def __init__(self, ref, nom, categorie, quantite, prix):
+        self.ref = str(ref) 
+        self.nom = nom 
+        self.categorie = categorie
+        self.quantite = int(quantite)
+        self.prix = float(prix)
+
+class GestionStockApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("StockMaster Pro 2026")
+        self.root.geometry("1100x850")
+        self.root.configure(bg="#f0f2f5")
+
+        self.produits = {}
+        self.ventes = []
+        self.fichier_excel = "gestion_stocks.xlsx"
+        
+        self.seuil_critique = tk.IntVar(value=5)
+        self.seuil_preventif = tk.IntVar(value=10) 
+
+        self.style = ttk.Style()
+        self.style.theme_use('clam')
+        
+        self.charger_donnees()
+        self.setup_ui()
+
+    def setup_ui(self):
+        header = tk.Frame(self.root, bg="#2c3e50", height=70)
+        header.pack(fill="x")
+        tk.Label(header, text="📦 SYSTÈME DE GESTION DE STOCK", font=("Segoe UI", 16, "bold"), fg="white", bg="#2c3e50").pack(pady=20)
+
+        self.tabs = ttk.Notebook(self.root)
+        self.tab_inv = ttk.Frame(self.tabs)
+        self.tab_cat = ttk.Frame(self.tabs)
+        self.tab_vnt = ttk.Frame(self.tabs)
+        
+        self.tabs.add(self.tab_inv, text=" INVENTAIRE GENERAL ")
+        self.tabs.add(self.tab_cat, text=" RECHERCHE PAR CATÉGORIE ") 
+        self.tabs.add(self.tab_vnt, text=" VENTES & STATISTIQUES ")
+        self.tabs.pack(expand=1, fill="both", padx=10, pady=10)
+
+        self.create_inventaire_ui()
+        self.create_categorie_ui()
+        self.create_ventes_ui()
+        self.maj_visuelle()
+
+    def create_inventaire_ui(self):
+        main_frame = tk.Frame(self.tab_inv, bg="white")
+        main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # Alertes
+        config_frame = tk.LabelFrame(main_frame, text=" Paramètres des Alertes Stock ", bg="#ecf0f1")
+        config_frame.pack(fill="x", padx=10, pady=5)
+        tk.Label(config_frame, text="🔴 Critique si <").pack(side="left", padx=10)
+        ttk.Entry(config_frame, textvariable=self.seuil_critique, width=5).pack(side="left", padx=5)
+        tk.Label(config_frame, text="🟡 Préventif si <").pack(side="left", padx=10)
+        ttk.Entry(config_frame, textvariable=self.seuil_preventif, width=5).pack(side="left", padx=5)
+        tk.Button(config_frame, text="Appliquer", command=self.maj_visuelle).pack(side="left", padx=20)
+
+        # Formulaire
+        form_frame = tk.LabelFrame(main_frame, text=" Fiche Produit ", bg="white")
+        form_frame.pack(fill="x", padx=10, pady=10)
+        fields = ["Référence", "Nom", "Catégorie", "Quantité", "Prix"]
+        self.entries = {}
+        for i, field in enumerate(fields):
+            tk.Label(form_frame, text=field, bg="white").grid(row=0, column=i, padx=5)
+            ent = ttk.Entry(form_frame)
+            ent.grid(row=1, column=i, padx=5, pady=5)
+            self.entries[field] = ent
+
+        tk.Button(form_frame, text="ENREGISTRER", bg="#27ae60", fg="white", command=self.ajouter_ou_modifier).grid(row=1, column=5, padx=10)
+
+        # Tableau
+        self.tree = ttk.Treeview(main_frame, columns=("REF", "NOM", "CAT", "STOCK", "PRIX"), show="headings")
+        for col in ("REF", "NOM", "CAT", "STOCK", "PRIX"):
+            self.tree.heading(col, text=col)
+            self.tree.column(col, anchor="center")
+        
+        self.tree.tag_configure('alerte', background='#ff7675')
+        self.tree.tag_configure('warning', background='#ffeaa7')
+        self.tree.pack(fill="both", expand=True, padx=10, pady=5)
+        self.tree.bind('<<TreeviewSelect>>', self.remplir_champs_depuis_selection)
+
+        tk.Button(main_frame, text="SUPPRIMER LE PRODUIT", bg="#e74c3c", fg="white", command=self.supprimer_produit_securise).pack(pady=5)
+
+    def create_categorie_ui(self):
+        frame = tk.Frame(self.tab_cat, bg="white")
+        frame.pack(fill="both", expand=True, padx=20, pady=20)
+        self.cat_combo = ttk.Combobox(frame, state="readonly")
+        self.cat_combo.pack(pady=10)
+        self.cat_combo.bind("<<ComboboxSelected>>", self.actualiser_filtre_cat)
+        self.tree_cat = ttk.Treeview(frame, columns=("REF", "NOM", "STOCK", "PRIX"), show="headings")
+        self.tree_cat.pack(fill="both", expand=True)
+
+    def create_ventes_ui(self):
+        frame = tk.Frame(self.tab_vnt, bg="white")
+        frame.pack(fill="both", expand=True, padx=20, pady=20)
+        v_box = tk.LabelFrame(frame, text=" Enregistrer une vente ")
+        v_box.pack(fill="x", pady=10)
+        
+        tk.Label(v_box, text="Réf:").pack(side="left")
+        self.vnt_ref = ttk.Entry(v_box, width=15)
+        self.vnt_ref.pack(side="left", padx=5)
+        tk.Label(v_box, text="Qté:").pack(side="left")
+        self.vnt_qte = ttk.Entry(v_box, width=10)
+        self.vnt_qte.pack(side="left", padx=5)
+        
+        tk.Button(v_box, text="VALIDER", bg="#3498db", fg="white", command=self.vendre_produit).pack(side="left", padx=10)
+        self.rapport_txt = tk.Text(frame, height=15)
+        self.rapport_txt.pack(fill="both", expand=True, pady=10)
+
+
+    def maj_visuelle(self):
+        for i in self.tree.get_children(): self.tree.delete(i) 
+        try:
+            crit, prev = self.seuil_critique.get(), self.seuil_preventif.get()
+        except: return
+
+        for p in self.produits.values():
+            tag = 'alerte' if p.quantite < crit else ('warning' if p.quantite < prev else '')
+            self.tree.insert('', 'end', values=(p.ref, p.nom, p.categorie, p.quantite, f"{p.prix}€"), tags=(tag,))
+        self.actualiser_liste_categories()
+
+    def ajouter_ou_modifier(self):
+        try:
+            ref = self.entries["Référence"].get()
+            self.produits[ref] = Produit(ref, self.entries["Nom"].get(), self.entries["Catégorie"].get(),
+                                         self.entries["Quantité"].get(), self.entries["Prix"].get())
+            self.sauvegarder_donnees() # ACTUALISATION EXCEL IMMEDIATE
+            self.maj_visuelle()
+            messagebox.showinfo("Succès", "Produit enregistré et Excel actualisé.")
+        except: messagebox.showerror("Erreur", "Saisie incorrecte")
+
+    def vendre_produit(self):
+        ref = self.vnt_ref.get() 
+        try:
+            qte = int(self.vnt_qte.get()) 
+            if ref in self.produits and self.produits[ref].quantite >= qte:
+                p = self.produits[ref]
+                p.quantite -= qte 
+                self.ventes.append({"produit":p.nom, "quantite":qte, "date":datetime.now().strftime("%d/%m/%Y"),
+                                    "total":qte * p.prix, "categorie":p.categorie})
+                self.sauvegarder_donnees()  
+                self.maj_visuelle()
+                messagebox.showinfo("Vente", "Vente validée et Excel actualisé.")
+            else: messagebox.showwarning("Stock", "Quantité insuffisante") 
+        except: messagebox.showerror("Erreur", "Format incorrect") 
+
+    def supprimer_produit_securise(self):
+        sel = self.tree.selection() 
+        if sel and messagebox.askyesno("Sécurité", "Supprimer définitivement ?"): 
+            ref = str(self.tree.item(sel)['values'][0]) 
+            if ref in self.produits:
+                del self.produits[ref] 
+                self.sauvegarder_donnees()
+                self.maj_visuelle()
+
+    def sauvegarder_donnees(self):
+        wb = Workbook()
+        ws1 = wb.active
+        ws1.title = "Inventaire"
+        ws1.append(["Référence", "Nom", "Catégorie", "Quantité", "Prix"])
+        for p in self.produits.values(): 
+
+            ws1.append([p.ref, p.nom, p.categorie, p.quantite, p.prix])     
+        ws2 = wb.create_sheet("Ventes")
+        ws2.append(["Produit", "Quantité", "Date", "Total", "Catégorie"])
+        for v in self.ventes: ws2.append([v['produit'], v['quantite'], v['date'], v['total'], v['categorie']])
+        
+        try:
+            wb.save(self.fichier_excel) 
+        except:
+            messagebox.showerror("Fichier Excel ouvert", "Fermez le fichier Excel pour permettre l'actualisation !")
+
+    def charger_donnees(self):
+        if os.path.exists(self.fichier_excel):
+            try:
+                wb = load_workbook(self.fichier_excel)
+                if "Inventaire" in wb.sheetnames:
+                    for r in wb["Inventaire"].iter_rows(min_row=2, values_only=True):
+                        if r[0]: self.produits[str(r[0])] = Produit(r[0], r[1], r[2], r[3], r[4])
+                if "Ventes" in wb.sheetnames:
+                    for r in wb["Ventes"].iter_rows(min_row=2, values_only=True):
+                        if r[0]: self.ventes.append({"produit":r[0], "quantite":r[1], "date":r[2], "total":r[3], "categorie":r[4]})
+            except: pass
+
+    def remplir_champs_depuis_selection(self, _event):
+        item = self.tree.selection() 
+        if item:
+            val = self.tree.item(item)['values'] 
+            for i, lab in enumerate(["Référence", "Nom", "Catégorie", "Quantité"]):
+                self.entries[lab].delete(0, tk.END) 
+                self.entries[lab].insert(0, val[i])
+            self.entries["Prix"].delete(0, tk.END)
+            self.entries["Prix"].insert(0, str(val[4]).replace('€',''))
+
+    def actualiser_liste_categories(self):
+        cats = sorted(list(set(p.categorie for p in self.produits.values() if p.categorie)))
+        self.cat_combo['values'] = cats
+
+    def actualiser_filtre_cat(self, _event=None):
+        for i in self.tree_cat.get_children(): self.tree_cat.delete(i)
+        filtre = self.cat_combo.get()
+        match = [p for p in self.produits.values() if p.categorie == filtre]
+        for p in match:
+            self.tree_cat.insert('', 'end', values=(p.ref, p.nom, p.quantite, f"{p.prix}€"))
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = GestionStockApp(root)
+    root.mainloop()
