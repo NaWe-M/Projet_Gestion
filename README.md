@@ -21,7 +21,7 @@ Application de bureau développée en Python pour gérer l'inventaire, les vente
 
 ```bash
 pip install openpyxl
-python Code_Projet_Gestion.py
+python Code_Projet_Gestion
 ```
 
 ## Contexte
